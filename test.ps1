@@ -2,6 +2,9 @@ $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $releaseDirectory = Join-Path $projectRoot 'build\Win32\Release'
+
+& (Join-Path $projectRoot 'validate-workflow.ps1')
+
 $tests = @(
     'ProxyExportsTest.exe',
     'MetadataSourceTest.exe',

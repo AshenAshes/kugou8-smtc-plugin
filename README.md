@@ -121,11 +121,11 @@ GitHub Actions 会在以下情况下执行 Win32 Release 构建和全部测试�
 - 向 `main` 创建 Pull Request。
 - 手动运行工作流。
 
-发布新版本前，先修改 `resource.rc` 中的文件版本，然后创建并推送对应标签。例如 DLL 版本为 `0.4.5.0` 时：
+发布新版本前，先修改 `resource.rc` 中的文件版本，然后创建并推送对应标签。例如 DLL 版本为 `0.4.6.0` 时：
 
 ```powershell
-git tag v0.4.5
-git push origin v0.4.5
+git tag v0.4.6
+git push origin v0.4.6
 ```
 
 工作流会校验标签与 DLL 版本是否一致，测试通过后自动创建 GitHub Release，并且只上传 `version.dll` 作为自定义附件。
@@ -139,6 +139,7 @@ third_party/libwebp/         固定版本的 libwebp 源码
 .github/workflows/build.yml  GitHub Actions 工作流
 build.ps1                    Win32 Release 构建脚本
 test.ps1                     测试入口
+validate-workflow.ps1        Actions Artifact 契约检查
 resource.rc                  DLL 版本资源
 version.def                  version.dll 导出表
 ```

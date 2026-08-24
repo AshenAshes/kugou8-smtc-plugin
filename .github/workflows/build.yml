@@ -62,7 +62,7 @@ jobs:
 
     steps:
       - name: 下载已验证的 DLL
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: version.dll
           path: release

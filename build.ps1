@@ -164,5 +164,3 @@ Invoke-ProjectBuild (Join-Path $projectRoot 'MetadataSourceTest.vcxproj')
 Invoke-ProjectBuild (Join-Path $projectRoot 'RuntimePolicyTest.vcxproj')
 Invoke-ProjectBuild (Join-Path $projectRoot 'SharedMetadataTest.vcxproj')
 Invoke-ProjectBuild (Join-Path $projectRoot 'MediaFeaturesTest.vcxproj')
-
-exit 0

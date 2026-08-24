@@ -1,6 +1,10 @@
 # 酷狗音乐 8 SMTC 插件
 
-[![构建与发布](https://github.com/AshenAshes/kugou8-smtc-plugin/actions/workflows/build.yml/badge.svg)](https://github.com/AshenAshes/kugou8-smtc-plugin/actions/workflows/build.yml)
+> 写在前面的话：
+> 
+> 为什么还在用这么老的版本？
+> 1. 旧时代的残党无法接受酷狗9.0版本后网易云like的UI风格，我说歌单和歌词就应该显示在同一页有没有懂的？
+> 2. 8.0版本的超重低音音效找不到代餐，后面几个版本把这个音效改了，难听得要死
 
 这是一个专用于酷狗音乐 `8.3.97.21592` 的 32 位进程内插件。插件随酷狗自动加载，将当前歌曲、歌手、封面和播放状态发布到 Windows System Media Transport Controls（SMTC），供 FlowTrak 等程序读取，并支持通过 SMTC 播放、暂停、切换上一首和下一首。
 
@@ -56,8 +60,6 @@ Release 的自定义附件只有插件本体 `version.dll`。GitHub 自动显示
 2. 从上述两个目录删除插件的 `version.dll`。
 3. 如果安装前备份过其他同名文件，将备份恢复到原位置。
 
-不要删除或修改 `C:\Windows\SysWOW64\version.dll`。
-
 ## 日志与排查
 
 日志位置：
@@ -112,23 +114,6 @@ build\Win32\Release\version.dll
 ```
 
 自动化测试只验证 DLL 转发、元数据解析、共享内存、运行策略、封面处理、SMTC 主机和控制策略。与真实酷狗界面的播放控制、切歌、封面及长期稳定性仍需人工验证。
-
-## 自动构建与发布
-
-GitHub Actions 会在以下情况下执行 Win32 Release 构建和全部测试：
-
-- 推送到 `main` 分支。
-- 向 `main` 创建 Pull Request。
-- 手动运行工作流。
-
-发布新版本前，先修改 `resource.rc` 中的文件版本，然后创建并推送对应标签。例如 DLL 版本为 `0.4.7.0` 时：
-
-```powershell
-git tag v0.4.7
-git push origin v0.4.7
-```
-
-工作流会校验标签与 DLL 版本是否一致，测试通过后自动创建 GitHub Release，并且只上传 `version.dll` 作为自定义附件。
 
 ## 项目结构
 

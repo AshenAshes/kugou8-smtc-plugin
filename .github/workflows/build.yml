@@ -1,0 +1,79 @@
+name: 构建与发布
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v6
+
+      - name: 编译 Win32 Release
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: 运行自动化测试
+        shell: pwsh
+        run: ./test.ps1
+
+      - name: 校验标签与 DLL 版本
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^v(?<version>\d+\.\d+\.\d+)$') {
+              throw "发布标签必须采用 v主版本.次版本.修订号 格式"
+          }
+          $expected = "$($Matches.version).0"
+          $dll = Get-Item -LiteralPath './build/Win32/Release/version.dll'
+          if ($dll.VersionInfo.ProductVersion -ne $expected) {
+              throw "标签要求版本 $expected，DLL 实际版本为 $($dll.VersionInfo.ProductVersion)"
+          }
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: version.dll
+          path: build/Win32/Release/version.dll
+          archive: false
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 5
+    permissions:
+      contents: write
+
+    steps:
+      - name: 下载已验证的 DLL
+        uses: actions/download-artifact@v7
+        with:
+          name: version.dll
+          path: release
+
+      - name: 创建 GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME `
+            './release/version.dll' `
+            --verify-tag `
+            --generate-notes `
+            --title $env:GITHUB_REF_NAME

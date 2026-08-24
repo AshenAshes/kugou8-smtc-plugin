@@ -6,7 +6,7 @@
 > 1. 旧时代的残党无法接受酷狗9.0版本后网易云like的UI风格，我说歌单和歌词就应该显示在同一页有没有懂的？
 > 2. 8.0版本的超重低音音效找不到代餐，后面几个版本把这个音效改了，难听得要死
 
-这是一个专用于酷狗音乐 `8.3.97.21592` 的 32 位进程内插件。插件随酷狗自动加载，将当前歌曲、歌手、封面和播放状态发布到 Windows System Media Transport Controls（SMTC），供 FlowTrak 等程序读取，并支持通过 SMTC 播放、暂停、切换上一首和下一首。
+这是一个专用于酷狗音乐 `8.3.97.21592` 的 32 位进程内插件。插件随酷狗自动加载，将当前歌曲、歌手、封面和播放状态发布到 Windows System Media Transport Controls（SMTC），供其他程序读取，并支持通过 SMTC 播放、暂停、切换上一首和下一首。
 
 本项目不修改酷狗可执行文件，也不包含或分发酷狗及 Windows 的原始二进制文件。
 
@@ -41,18 +41,18 @@ Release 的自定义附件只有插件本体 `version.dll`。GitHub 自动显示
 ## 安装
 
 1. 完全退出酷狗，包括系统托盘中的酷狗进程。
-2. 将下载的同一个 `version.dll` 分别复制到以下两个目录：
+2. 将下载的 `version.dll` 分别复制到以下两个目录：
 
    ```text
    C:\Program Files (x86)\KuGou\KGMusic
    C:\Program Files (x86)\KuGou\KGMusic\8.3.97.21592
    ```
 
-3. 启动酷狗并播放音乐，然后在 Windows 媒体面板或 FlowTrak 中检查歌曲信息。
+3. 启动酷狗并播放音乐，然后在 Windows 媒体面板中检查歌曲信息。
 
-这里的 `version.dll` 是代理 DLL：Windows 会优先从酷狗目录加载它，插件再通过系统目录的绝对路径加载并转发到 Windows 原版 `version.dll`。不需要复制或修改系统 DLL，也不再需要 `version_original.dll`。
+这里的 `version.dll` 是代理 DLL：Windows 会优先从酷狗目录加载它，插件再通过系统目录的绝对路径加载并转发到 Windows 原版 `version.dll`。不需要复制或修改系统 DLL。
 
-如果上述目录原本存在不是本插件的同名文件，请先备份，不要直接覆盖。插件本体的文件说明为 `KuGou SMTC Plugin proxy`。
+如果上述目录原本存在不是本插件的同名文件，请先备份，不要直接覆盖。
 
 ## 卸载
 

@@ -67,10 +67,19 @@ jobs:
           name: version.dll
           path: release
 
+      - name: 校验 Release 附件
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem -LiteralPath './release' -File -Recurse)
+          if ($files.Count -ne 1 -or $files[0].Name -ne 'version.dll') {
+              throw "Release 必须且只能包含 version.dll"
+          }
+
       - name: 创建 GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release create $env:GITHUB_REF_NAME `
             './release/version.dll' `

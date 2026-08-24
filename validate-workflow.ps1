@@ -11,5 +11,9 @@ if ($usesDirectArtifact -and
     $workflow -notmatch 'uses:\s*actions/download-artifact@v8') {
     throw 'Direct artifacts uploaded by upload-artifact v7 require download-artifact v8 or newer.'
 }
+if ($workflow -match 'gh release create' -and
+    $workflow -notmatch 'GH_REPO:\s*\$\{\{ github\.repository \}\}') {
+    throw 'A release job without a checkout must provide GH_REPO explicitly.'
+}
 
 Write-Host 'Workflow artifact contract is valid.'

@@ -121,11 +121,11 @@ GitHub Actions 会在以下情况下执行 Win32 Release 构建和全部测试�
 - 向 `main` 创建 Pull Request。
 - 手动运行工作流。
 
-发布新版本前，先修改 `resource.rc` 中的文件版本，然后创建并推送对应标签。例如 DLL 版本为 `0.4.6.0` 时：
+发布新版本前，先修改 `resource.rc` 中的文件版本，然后创建并推送对应标签。例如 DLL 版本为 `0.4.7.0` 时：
 
 ```powershell
-git tag v0.4.6
-git push origin v0.4.6
+git tag v0.4.7
+git push origin v0.4.7
 ```
 
 工作流会校验标签与 DLL 版本是否一致，测试通过后自动创建 GitHub Release，并且只上传 `version.dll` 作为自定义附件。

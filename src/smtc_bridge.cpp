@@ -250,6 +250,7 @@ void SmtcBridge::Poll() noexcept {
             last_playing_ = *playing;
             playback_initialized_ = true;
         }
+        PublishTimeline();
     } catch (const winrt::hresult_error& error) {
         logging::WriteError(L"SMTC polling", error.code().value);
     } catch (...) {
@@ -258,6 +259,7 @@ void SmtcBridge::Poll() noexcept {
 }
 
 void SmtcBridge::PublishMetadata(const std::wstring& raw_title) {
+    ClearTimeline();
     auto updater = smtc_.DisplayUpdater();
     updater.ClearAll();
 
@@ -306,6 +308,39 @@ void SmtcBridge::PublishPlaybackStatus(bool playing) {
                 : winrt::Windows::Media::MediaPlaybackStatus::Paused);
     logging::Write(playing ? L"SMTC status: Playing"
                            : L"SMTC status: Paused");
+}
+
+void SmtcBridge::ClearTimeline() {
+    winrt::Windows::Media::SystemMediaTransportControlsTimelineProperties timeline;
+    timeline.StartTime(std::chrono::seconds(0));
+    timeline.MinSeekTime(std::chrono::seconds(0));
+    timeline.Position(std::chrono::seconds(0));
+    timeline.MaxSeekTime(std::chrono::seconds(0));
+    timeline.EndTime(std::chrono::seconds(0));
+    smtc_.UpdateTimelineProperties(timeline);
+    timeline_available_ = false;
+}
+
+void SmtcBridge::PublishTimeline() {
+    const auto sample = metadata::ReadPlaybackControlTimeline(last_raw_title_);
+    if (!sample) {
+        if (timeline_available_) {
+            ClearTimeline();
+            logging::Write(L"SMTC timeline cleared: playback time unavailable");
+        }
+        return;
+    }
+    winrt::Windows::Media::SystemMediaTransportControlsTimelineProperties timeline;
+    timeline.StartTime(std::chrono::seconds(0));
+    timeline.MinSeekTime(std::chrono::seconds(0));
+    timeline.Position(std::chrono::seconds(sample->position_seconds));
+    timeline.MaxSeekTime(std::chrono::seconds(sample->duration_seconds));
+    timeline.EndTime(std::chrono::seconds(sample->duration_seconds));
+    smtc_.UpdateTimelineProperties(timeline);
+    if (!timeline_available_) {
+        logging::Write(L"SMTC timeline available");
+    }
+    timeline_available_ = true;
 }
 
 void SmtcBridge::TryPublishCoverArt() noexcept {

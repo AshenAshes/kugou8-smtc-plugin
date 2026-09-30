@@ -24,6 +24,66 @@ struct LegacyWString {
 }  // namespace
 
 int wmain() {
+    using plugin::metadata::ParsePlaybackTime;
+    for (const auto& item : std::vector<std::pair<std::wstring, std::int64_t>>{
+             {L"00:00", 0}, {L"02:21", 141}, {L"02:36", 156},
+             {L"90:01", 5401}, {L"1:02:03", 3723}}) {
+        if (ParsePlaybackTime(item.first) != item.second) {
+            std::wcerr << L"FAIL: valid playback time rejected\n";
+            return 5;
+        }
+    }
+    for (const auto* invalid : {L"", L"正在缓冲", L"--:--", L"01:60",
+             L"-1:23", L"1", L"1:", L":23", L"1:2", L"1:2:03",
+             L"1:00:00:00", L"999999999:00", L"01:02junk"}) {
+        if (ParsePlaybackTime(invalid)) {
+            std::wcerr << L"FAIL: invalid playback time accepted\n";
+            return 6;
+        }
+    }
+
+    alignas(4) std::array<std::uint8_t, 0x400> time_control{};
+    const std::wstring time_name = L"PlaybackControlPanelTimeStatus";
+    LegacyWString time_name_value{};
+    time_name_value.storage.pointer = time_name.c_str();
+    time_name_value.size = static_cast<std::uint32_t>(time_name.size());
+    time_name_value.capacity = 63;
+    std::memcpy(time_control.data() + 0x3C, &time_name_value, sizeof(time_name_value));
+    const auto set_time = [&](size_t offset, const wchar_t* text) {
+        LegacyWString value{};
+        wcscpy_s(value.storage.inline_buffer, text);
+        value.size = static_cast<std::uint32_t>(wcslen(text));
+        value.capacity = 7;
+        std::memcpy(time_control.data() + offset, &value, sizeof(value));
+    };
+    set_time(0x3BC, L"02:21");
+    set_time(0x3D8, L"02:36");
+    const auto time = plugin::metadata::ReadTimelineFromControl(time_control.data());
+    if (!time || time->position_seconds != 141 || time->duration_seconds != 156) {
+        std::wcerr << L"FAIL: time control fields decoded incorrectly\n";
+        return 7;
+    }
+    // A manual backward seek must immediately replace the previous position.
+    set_time(0x3BC, L"00:05");
+    const auto seek = plugin::metadata::ReadTimelineFromControl(time_control.data());
+    if (!seek || seek->position_seconds != 5) {
+        return 8;
+    }
+    set_time(0x3D8, L"00:00");
+    if (plugin::metadata::ReadTimelineFromControl(time_control.data())) {
+        return 9;
+    }
+    set_time(0x3D8, L"00:04");
+    if (plugin::metadata::ReadTimelineFromControl(time_control.data())) {
+        return 10;
+    }
+    set_time(0x3D8, L"02:36");
+    time_control[0x3C + 16] = 0;  // Destroyed/reused control.
+    if (plugin::metadata::ReadTimelineFromControl(time_control.data()) ||
+        plugin::metadata::ReadTimelineFromControl(nullptr)) {
+        return 11;
+    }
+
     const std::wstring expected = L"SNoW - 逆さまの蝶 (倒逆之蝶)";
 
     LegacyWString inline_value{};

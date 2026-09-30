@@ -35,6 +35,8 @@ private:
     void PublishMetadata(const std::wstring& raw_title);
     void PublishPlaybackStatus(bool playing);
     void TryPublishCoverArt() noexcept;
+    void PublishTimeline();
+    void ClearTimeline();
     void OnButtonPressed(
         winrt::Windows::Media::SystemMediaTransportControlsButton button)
         noexcept;
@@ -49,6 +51,7 @@ private:
     std::wstring last_raw_title_;
     bool last_playing_ = false;
     bool playback_initialized_ = false;
+    bool timeline_available_ = false;
     AudioActivityMonitor audio_monitor_;
     KuGouMediaController media_controller_;
     MediaControlEchoGuard media_control_echo_guard_;

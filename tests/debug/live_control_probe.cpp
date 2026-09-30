@@ -8,6 +8,8 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <io.h>
+#include <fcntl.h>
 
 namespace {
 
@@ -333,12 +335,16 @@ std::wstring ProcessPath(HANDLE process) {
 
 }  // namespace
 
-int wmain() {
+int wmain(int argc, wchar_t** argv) {
+    _setmode(_fileno(stdout), _O_U16TEXT);
+    const bool timeline_only = argc > 1 &&
+        std::wstring(argv[1]) == L"--timeline";
     const std::vector<std::wstring> names = {
         L"PlaybackControlPanelSongStatus",
         L"PlaybackControlPanelPlayPrev",
         L"PlaybackControlPanelPlayNext",
-        L"PlaybackControlPanelPlayPause"};
+        L"PlaybackControlPanelPlayPause",
+        L"PlaybackControlPanelTimeStatus"};
     const Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
     if (snapshot.get() == INVALID_HANDLE_VALUE) {
         return 1;
@@ -367,11 +373,20 @@ int wmain() {
             const auto controls = FindControls(process.get(), ranges, names);
             for (const auto& control : controls) {
                 std::wcout << L"  control " << control.name << L" 0x"
-                           << std::hex << control.address << std::dec << L'\n';
+                           << std::hex << control.address << std::dec
+                           << L" text=" << DecodeString(process.get(), control.address + 0x54)
+                           << L'\n';
+                if (timeline_only && control.name == L"PlaybackControlPanelTimeStatus") {
+                    std::wcout << L"    elapsed="
+                               << DecodeString(process.get(), control.address + 0x3BC)
+                               << L" duration="
+                               << DecodeString(process.get(), control.address + 0x3D8)
+                               << L'\n';
+                }
             }
             std::wcout << L"  named controls=" << controls.size() << L'\n';
             for (const auto& control : controls) {
-                if (control.name == L"PlaybackControlPanelPlayPause") {
+                if (!timeline_only && control.name == L"PlaybackControlPanelPlayPause") {
                     ProbePanelOwners(process.get(), control.address);
                 }
             }

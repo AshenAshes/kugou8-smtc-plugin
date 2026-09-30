@@ -25,6 +25,12 @@ constexpr size_t kLegacyStringObjectSize = 24;
 std::uintptr_t g_playback_control = 0;
 ULONGLONG g_next_control_scan_tick = 0;
 MetadataScanBackoff g_control_scan_backoff;
+constexpr std::wstring_view kTimeControlName = L"PlaybackControlPanelTimeStatus";
+constexpr size_t kElapsedTimeOffset = 0x3BC;
+constexpr size_t kTotalTimeOffset = 0x3D8;
+std::uintptr_t g_time_control = 0;
+ULONGLONG g_next_time_scan_tick = 0;
+MetadataScanBackoff g_time_scan_backoff;
 
 struct ModuleRange {
     std::uintptr_t start;
@@ -367,6 +373,93 @@ std::wstring ReadPlaybackControlTitle(bool* found) {
     }
     RecordControlScanFailure(now);
     return {};
+}
+
+std::optional<std::int64_t> ParsePlaybackTime(std::wstring_view text) {
+    // Accept mm:ss (including minutes >= 60) and hh:mm:ss only.
+    if (text.empty() || text.size() > 12) {
+        return std::nullopt;
+    }
+    std::int64_t total = 0;
+    unsigned fields = 0;
+    while (!text.empty()) {
+        const auto colon = text.find(L':');
+        const auto field = text.substr(0, colon);
+        if (field.empty() || field.size() > 6 ||
+            (fields > 0 && field.size() != 2)) {
+            return std::nullopt;
+        }
+        std::int64_t value = 0;
+        for (const wchar_t character : field) {
+            if (character < L'0' || character > L'9') {
+                return std::nullopt;
+            }
+            value = value * 10 + character - L'0';
+        }
+        if ((fields > 0 && value >= 60) || ++fields > 3) {
+            return std::nullopt;
+        }
+        total = total * 60 + value;
+        if (total > 7 * 24 * 60 * 60) {
+            return std::nullopt;
+        }
+        if (colon == std::wstring_view::npos) {
+            return fields >= 2 ? std::optional<std::int64_t>(total)
+                               : std::nullopt;
+        }
+        text.remove_prefix(colon + 1);
+    }
+    return std::nullopt;
+}
+
+std::optional<PlaybackTimeline> ReadTimelineFromControl(const void* control) {
+    if (control == nullptr) {
+        return std::nullopt;
+    }
+    const auto* bytes = static_cast<const std::uint8_t*>(control);
+    if (DecodeLegacyMsvcWstring(bytes + kControlNameOffset) != kTimeControlName) {
+        return std::nullopt;
+    }
+    const auto duration = ParsePlaybackTime(
+        DecodeLegacyMsvcWstring(bytes + kTotalTimeOffset));
+    const auto position = ParsePlaybackTime(
+        DecodeLegacyMsvcWstring(bytes + kElapsedTimeOffset));
+    // Recheck duration/name in case the UI is rebuilding or switching tracks.
+    if (!duration || !position || *duration <= 0 || *position > *duration ||
+        DecodeLegacyMsvcWstring(bytes + kControlNameOffset) != kTimeControlName ||
+        ParsePlaybackTime(DecodeLegacyMsvcWstring(bytes + kTotalTimeOffset)) != duration) {
+        return std::nullopt;
+    }
+    return PlaybackTimeline{*position, *duration};
+}
+
+std::optional<PlaybackTimeline> ReadPlaybackControlTimeline(
+    const std::wstring& expected_title) {
+    if (expected_title.empty() || ReadPlaybackControlTitle() != expected_title) {
+        return std::nullopt;
+    }
+    if (g_time_control != 0 &&
+        DecodeLegacyMsvcWstring(reinterpret_cast<const void*>(
+            g_time_control + kControlNameOffset)) != kTimeControlName) {
+        g_time_control = 0;
+        g_next_time_scan_tick = 0;
+        g_time_scan_backoff.Reset();
+    }
+    if (g_time_control == 0) {
+        const auto now = GetTickCount64();
+        if (now < g_next_time_scan_tick) {
+            return std::nullopt;
+        }
+        g_time_control = FindNamedControlAddress(std::wstring(kTimeControlName));
+        if (g_time_control == 0) {
+            g_next_time_scan_tick = now + g_time_scan_backoff.RecordFailure();
+            return std::nullopt;
+        }
+        g_time_scan_backoff.Reset();
+    }
+    const auto timeline = ReadTimelineFromControl(
+        reinterpret_cast<const void*>(g_time_control));
+    return ReadPlaybackControlTitle() == expected_title ? timeline : std::nullopt;
 }
 
 }  // namespace plugin::metadata

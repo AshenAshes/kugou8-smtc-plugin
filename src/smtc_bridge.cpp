@@ -1,4 +1,5 @@
 #include "smtc_bridge.h"
+#include "smtc_metadata.h"
 
 #include "audio_session.h"
 #include "cover_art.h"
@@ -13,6 +14,7 @@
 
 #include <array>
 #include <chrono>
+#include <new>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -77,7 +79,7 @@ std::pair<std::wstring, std::wstring> SplitArtistAndTitle(
 
 }  // namespace
 
-SmtcBridge::SmtcBridge(HMODULE module) noexcept : module_(module) {}
+SmtcBridge::SmtcBridge(HMODULE module) : module_(module) {}
 
 SmtcBridge::~SmtcBridge() {
     try {
@@ -282,7 +284,7 @@ void SmtcBridge::PublishMetadata(const std::wstring& raw_title) {
     updater.Type(winrt::Windows::Media::MediaPlaybackType::Music);
     auto music = updater.MusicProperties();
     music.Title(title);
-    music.Artist(artist);
+    music.Artist(metadata::ArtistForSmtc(artist));
     updater.Update();
 
     published_cover_path_.clear();
@@ -362,7 +364,15 @@ void SmtcBridge::TryPublishCoverArt() noexcept {
         published_cover_path_ = cover->path;
         logging::Write(L"SMTC cover updated");
     } catch (const winrt::hresult_error& error) {
+        if (IsResourceAllocationFailure(error.code().value)) {
+            cover_retry_until_ = 0;
+            next_cover_retry_ = 0;
+        }
         logging::WriteError(L"SMTC cover update", error.code().value);
+    } catch (const std::bad_alloc&) {
+        cover_retry_until_ = 0;
+        next_cover_retry_ = 0;
+        logging::Write(L"SMTC cover update stopped: allocation failed");
     } catch (...) {
         logging::Write(L"SMTC cover update failed with an unknown error");
     }
@@ -422,33 +432,39 @@ void SmtcBridge::HandleMediaControl(MediaControlAction action) noexcept {
 
 void SmtcBridge::HandleMediaControlCompletion(
     MediaControlAction action, bool executed) noexcept {
-    if (!executed) {
-        logging::Write(L"KuGou UI-thread media control failed");
-        return;
-    }
+    try {
+        if (!executed) {
+            logging::Write(L"KuGou UI-thread media control failed");
+            return;
+        }
 
-    const ULONGLONG now = GetTickCount64();
-    playback_command_status_guard_.RecordSuccessfulCommand(action, now);
-    const std::optional<bool> requested = RequestedPlaybackState(action);
-    if (requested.has_value()) {
-        PublishPlaybackStatus(*requested);
-        last_playing_ = *requested;
-        playback_initialized_ = true;
-    }
+        const ULONGLONG now = GetTickCount64();
+        playback_command_status_guard_.RecordSuccessfulCommand(action, now);
+        const std::optional<bool> requested = RequestedPlaybackState(action);
+        if (requested.has_value()) {
+            PublishPlaybackStatus(*requested);
+            last_playing_ = *requested;
+            playback_initialized_ = true;
+        }
 
-    switch (action) {
-        case MediaControlAction::play:
-            logging::Write(L"SMTC control executed: Play");
-            break;
-        case MediaControlAction::pause:
-            logging::Write(L"SMTC control executed: Pause");
-            break;
-        case MediaControlAction::previous:
-            logging::Write(L"SMTC control executed: Previous");
-            break;
-        case MediaControlAction::next:
-            logging::Write(L"SMTC control executed: Next");
-            break;
+        switch (action) {
+            case MediaControlAction::play:
+                logging::Write(L"SMTC control executed: Play");
+                break;
+            case MediaControlAction::pause:
+                logging::Write(L"SMTC control executed: Pause");
+                break;
+            case MediaControlAction::previous:
+                logging::Write(L"SMTC control executed: Previous");
+                break;
+            case MediaControlAction::next:
+                logging::Write(L"SMTC control executed: Next");
+                break;
+        }
+    } catch (const winrt::hresult_error& error) {
+        logging::WriteError(L"SMTC control completion", error.code().value);
+    } catch (...) {
+        logging::Write(L"SMTC control completion failed with an unknown error");
     }
 }
 

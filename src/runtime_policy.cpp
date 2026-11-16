@@ -1,5 +1,7 @@
 #include "runtime_policy.h"
 
+#include <windows.h>
+
 #include <cwchar>
 
 namespace plugin {
@@ -41,6 +43,13 @@ std::optional<bool> PlaybackStateForActivity(AudioActivity activity) {
         return std::nullopt;
     }
     return activity == AudioActivity::active;
+}
+
+bool IsResourceAllocationFailure(long error) noexcept {
+    return error == E_OUTOFMEMORY ||
+           error == HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY) ||
+           error == HRESULT_FROM_WIN32(ERROR_NO_SYSTEM_RESOURCES) ||
+           error == HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA);
 }
 
 std::uint32_t MetadataScanBackoff::RecordFailure() noexcept {

@@ -3,11 +3,14 @@
 
 #include <windows.h>
 #include <objbase.h>
+#include <wincodec.h>
+#include <wrl/client.h>
 
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -42,14 +45,68 @@ enum class FixtureFormat {
     jpeg,
 };
 
+bool CreateWicFixture(const std::filesystem::path& path, UINT width,
+                      UINT height, REFGUID format) {
+    using Microsoft::WRL::ComPtr;
+    std::filesystem::create_directories(path.parent_path());
+    ComPtr<IWICImagingFactory> factory;
+    ComPtr<IWICStream> stream;
+    ComPtr<IWICBitmapEncoder> encoder;
+    ComPtr<IWICBitmapFrameEncode> frame;
+    ComPtr<IPropertyBag2> properties;
+    HRESULT result = CoCreateInstance(CLSID_WICImagingFactory, nullptr,
+        CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+    if (SUCCEEDED(result)) { result = factory->CreateStream(&stream); }
+    if (SUCCEEDED(result)) {
+        result = stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
+    }
+    if (SUCCEEDED(result)) { result = factory->CreateEncoder(format, nullptr, &encoder); }
+    if (SUCCEEDED(result)) { result = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache); }
+    if (SUCCEEDED(result)) { result = encoder->CreateNewFrame(&frame, &properties); }
+    if (SUCCEEDED(result)) { result = frame->Initialize(properties.Get()); }
+    if (SUCCEEDED(result)) { result = frame->SetSize(width, height); }
+    WICPixelFormatGUID pixels = GUID_WICPixelFormat24bppBGR;
+    if (SUCCEEDED(result)) { result = frame->SetPixelFormat(&pixels); }
+    if (FAILED(result) || !IsEqualGUID(pixels, GUID_WICPixelFormat24bppBGR)) {
+        return false;
+    }
+    std::vector<BYTE> row(width * 3, 128);
+    for (UINT line = 0; line < height && SUCCEEDED(result); ++line) {
+        result = frame->WritePixels(1, width * 3,
+                                    static_cast<UINT>(row.size()), row.data());
+    }
+    if (SUCCEEDED(result)) { result = frame->Commit(); }
+    if (SUCCEEDED(result)) { result = encoder->Commit(); }
+    return SUCCEEDED(result);
+}
+
+bool HasImageSize(const std::wstring& path, UINT width, UINT height) {
+    using Microsoft::WRL::ComPtr;
+    ComPtr<IWICImagingFactory> factory;
+    ComPtr<IWICBitmapDecoder> decoder;
+    ComPtr<IWICBitmapFrameDecode> frame;
+    UINT actual_width = 0, actual_height = 0;
+    return SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr,
+               CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory))) &&
+           SUCCEEDED(factory->CreateDecoderFromFilename(path.c_str(), nullptr,
+               GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder)) &&
+           SUCCEEDED(decoder->GetFrame(0, &frame)) &&
+           SUCCEEDED(frame->GetSize(&actual_width, &actual_height)) &&
+           actual_width == width && actual_height == height;
+}
+
 bool CreateFixture(const std::filesystem::path& path,
                    std::uint64_t last_access_ticks,
                    FixtureFormat format, bool valid = true) {
     std::filesystem::create_directories(path.parent_path());
+    if (format == FixtureFormat::jpeg &&
+        !CreateWicFixture(path, 1, 1, GUID_ContainerFormatJpeg)) {
+        return false;
+    }
     HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE,
                               FILE_SHARE_READ | FILE_SHARE_WRITE |
                                   FILE_SHARE_DELETE,
-                              nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                              nullptr, format == FixtureFormat::jpeg ? OPEN_EXISTING : CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
                               nullptr);
     if (file == INVALID_HANDLE_VALUE) {
         return false;
@@ -65,19 +122,13 @@ bool CreateFixture(const std::filesystem::path& path,
     const unsigned char invalid_webp_payload[] = {
         'R', 'I', 'F', 'F', 5, 0, 0, 0, 'W', 'E', 'B', 'P',
         'V', 'P', '8', ' ', 0, 0, 0, 0};
-    const unsigned char jpeg_payload[] = {
-        0xFF, 0xD8, 0xFF, 0xE0, 0, 5, 'J', 'F', 0, 0,
-        0xFF, 0xD9};
-    const unsigned char* payload = jpeg_payload;
-    DWORD payload_size = static_cast<DWORD>(sizeof(jpeg_payload));
-    if (format == FixtureFormat::webp) {
-        payload = valid ? webp_payload : invalid_webp_payload;
-        payload_size = static_cast<DWORD>(valid ? sizeof(webp_payload)
+    const unsigned char* payload = valid ? webp_payload : invalid_webp_payload;
+    const DWORD payload_size = static_cast<DWORD>(valid ? sizeof(webp_payload)
                                                 : sizeof(invalid_webp_payload));
-    }
     DWORD bytes_written = 0;
-    const BOOL wrote = WriteFile(file, payload, payload_size,
-                                 &bytes_written, nullptr);
+    const bool wrote = format == FixtureFormat::jpeg ||
+        (WriteFile(file, payload, payload_size, &bytes_written, nullptr) &&
+         bytes_written == payload_size);
     ULARGE_INTEGER ticks{};
     ticks.QuadPart = last_access_ticks;
     FILETIME access_time{};
@@ -85,7 +136,7 @@ bool CreateFixture(const std::filesystem::path& path,
     access_time.dwHighDateTime = ticks.HighPart;
     const BOOL time_set = SetFileTime(file, nullptr, &access_time, nullptr);
     CloseHandle(file);
-    return wrote && bytes_written == payload_size && time_set;
+    return wrote && time_set;
 }
 
 bool HasPngSignature(const std::wstring& path) {
@@ -231,6 +282,34 @@ int wmain() {
     if (resolver.Resolve(L"Unknown Artist", L"Missing Song").has_value()) {
         std::wcerr << L"FAIL: unrelated stale cover was published\n";
         return 14;
+    }
+
+    const auto large = album_root / L"Large Song_1" / L"2048" / L"large.png";
+    const auto oversized = album_root / L"Oversized Song_1" / L"8192" / L"wide.png";
+    if (!CreateWicFixture(large, 2048, 1024, GUID_ContainerFormatPng) ||
+        !CreateWicFixture(oversized, 8192, 1, GUID_ContainerFormatPng)) {
+        std::wcerr << L"FAIL: cover dimension fixtures were not created\n";
+        return 15;
+    }
+    const auto resized = resolver.Resolve(L"Unknown Artist", L"Large Song");
+    if (!resized || !HasPngSignature(resized->path) ||
+        !HasImageSize(resized->path, 512, 256)) {
+        std::wcerr << L"FAIL: large cover was not bounded to 512 pixels\n";
+        return 16;
+    }
+    if (resolver.Resolve(L"Unknown Artist", L"Oversized Song")) {
+        std::wcerr << L"FAIL: over-budget cover was accepted\n";
+        return 17;
+    }
+    // Replacing a source at the same path must invalidate the prepared image.
+    if (!CreateWicFixture(large, 1024, 2048, GUID_ContainerFormatPng)) {
+        return 18;
+    }
+    const auto replaced = resolver.Resolve(L"Unknown Artist", L"Large Song");
+    if (!replaced || replaced->path == resized->path ||
+        !HasImageSize(replaced->path, 256, 512)) {
+        std::wcerr << L"FAIL: replaced source reused a stale prepared cover\n";
+        return 19;
     }
 
     std::wcout << L"PASS: media controls and cover selection are valid\n";

@@ -16,6 +16,7 @@ enum class ProcessRole {
 
 ProcessRole ClassifyProcessPath(const std::wstring& executable_path);
 std::optional<bool> PlaybackStateForActivity(AudioActivity activity);
+bool IsResourceAllocationFailure(long error) noexcept;
 
 class MetadataScanBackoff final {
 public:

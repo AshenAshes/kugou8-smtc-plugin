@@ -26,4 +26,21 @@ foreach ($test in $tests) {
     }
 }
 
+$faultTest = Join-Path $releaseDirectory 'FaultSafetyTest.exe'
+$faultFixture = Join-Path $projectRoot 'build\fault-fixtures\ui.dll'
+foreach ($case in @('file-leak', 'module-leak', 'constructor', 'completion',
+                    'completion-memory', 'cover-retry')) {
+    $arguments = @($case)
+    if ($case -eq 'file-leak') {
+        $arguments += Join-Path $projectRoot ('build\temp\fault-' + [guid]::NewGuid() + '.bin')
+    } elseif ($case -eq 'module-leak') {
+        $arguments += $faultFixture
+    }
+    Write-Host "Running fault safety probe: $case"
+    & $faultTest @arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Fault safety probe $case failed with exit code $LASTEXITCODE"
+    }
+}
+
 Write-Host 'All tests passed.'

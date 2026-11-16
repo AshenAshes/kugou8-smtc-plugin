@@ -56,6 +56,15 @@ int wmain() {
         return 7;
     }
 
+    for (const long error : {E_OUTOFMEMORY,
+             HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY),
+             HRESULT_FROM_WIN32(ERROR_NO_SYSTEM_RESOURCES),
+             HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA)}) {
+        if (!plugin::IsResourceAllocationFailure(error)) { return 8; }
+    }
+    if (plugin::IsResourceAllocationFailure(S_OK) ||
+        plugin::IsResourceAllocationFailure(E_ACCESSDENIED)) { return 9; }
+
     std::wcout << L"PASS: runtime failure policies are safe\n";
     return 0;
 }

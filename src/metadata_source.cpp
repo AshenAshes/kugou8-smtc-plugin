@@ -1,5 +1,6 @@
 #include "metadata_source.h"
 #include "runtime_policy.h"
+#include "unique_handle.h"
 
 #include <windows.h>
 #include <tlhelp32.h>
@@ -67,15 +68,15 @@ void RecordControlScanSuccess() noexcept {
 
 std::vector<ModuleRange> FindControlVtableRanges() {
     std::vector<ModuleRange> ranges;
-    HANDLE snapshot = CreateToolhelp32Snapshot(
-        TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
-    if (snapshot == INVALID_HANDLE_VALUE) {
+    const UniqueHandle snapshot(CreateToolhelp32Snapshot(
+        TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId()));
+    if (!snapshot) {
         return ranges;
     }
 
     MODULEENTRY32W entry{};
     entry.dwSize = sizeof(entry);
-    if (Module32FirstW(snapshot, &entry)) {
+    if (Module32FirstW(snapshot.get(), &entry)) {
         do {
             if (_wcsicmp(entry.szModule, L"ui.dll") == 0 ||
                 _wcsicmp(entry.szModule, L"kugou.dll") == 0) {
@@ -84,9 +85,8 @@ std::vector<ModuleRange> FindControlVtableRanges() {
                 ranges.push_back(
                     {start, start + static_cast<size_t>(entry.modBaseSize)});
             }
-        } while (Module32NextW(snapshot, &entry));
+        } while (Module32NextW(snapshot.get(), &entry));
     }
-    CloseHandle(snapshot);
     return ranges;
 }
 

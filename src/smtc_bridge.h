@@ -17,7 +17,7 @@ namespace plugin {
 
 class SmtcBridge final {
 public:
-    explicit SmtcBridge(HMODULE module) noexcept;
+    explicit SmtcBridge(HMODULE module);
     ~SmtcBridge();
 
     SmtcBridge(const SmtcBridge&) = delete;
@@ -26,6 +26,8 @@ public:
     int Run(bool require_playback_module = true);
 
 private:
+    friend struct SmtcBridgeTestAccess;
+
     static LRESULT CALLBACK WindowProc(HWND window, UINT message,
                                        WPARAM wparam, LPARAM lparam) noexcept;
 

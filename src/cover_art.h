@@ -20,7 +20,7 @@ public:
                      std::wstring prepared_cache_root);
 
     std::optional<CoverArt> Resolve(std::wstring_view artist,
-                                    std::wstring_view title) const noexcept;
+                                    std::wstring_view title) const;
 
 private:
     std::wstring album_cache_root_;

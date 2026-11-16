@@ -1,4 +1,6 @@
 #include "cover_art.h"
+#include "runtime_policy.h"
+#include "unique_handle.h"
 
 #include <windows.h>
 #include <shlobj.h>
@@ -13,6 +15,7 @@
 #include <cwchar>
 #include <cwctype>
 #include <optional>
+#include <new>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -32,6 +35,9 @@ enum class ImageFormat {
 };
 
 constexpr std::uint64_t kMaximumEncodedCoverBytes = 32ULL * 1024 * 1024;
+constexpr UINT kMaximumSourceEdge = 4096;
+constexpr std::uint64_t kMaximumSourcePixels = 16ULL * 1024 * 1024;
+constexpr UINT kMaximumPreparedEdge = 512;
 
 class FindHandle final {
 public:
@@ -349,66 +355,100 @@ bool ExtensionMatches(const std::wstring& path,
 
 std::optional<std::vector<std::uint8_t>> ReadFileBytes(
     const std::wstring& path) {
-    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
+    const UniqueHandle file(CreateFileW(path.c_str(), GENERIC_READ,
                               FILE_SHARE_READ | FILE_SHARE_WRITE |
                                   FILE_SHARE_DELETE,
                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
-                              nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
+                              nullptr));
+    if (!file) {
         return std::nullopt;
     }
 
     LARGE_INTEGER size{};
-    if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0 ||
+    if (!GetFileSizeEx(file.get(), &size) || size.QuadPart <= 0 ||
         static_cast<std::uint64_t>(size.QuadPart) >
             kMaximumEncodedCoverBytes) {
-        CloseHandle(file);
         return std::nullopt;
     }
 
     std::vector<std::uint8_t> bytes(
         static_cast<size_t>(size.QuadPart));
     DWORD bytes_read = 0;
-    const BOOL read = ReadFile(file, bytes.data(),
+    const BOOL read = ReadFile(file.get(), bytes.data(),
                                static_cast<DWORD>(bytes.size()),
                                &bytes_read, nullptr);
-    CloseHandle(file);
     if (!read || bytes_read != bytes.size()) {
         return std::nullopt;
     }
     return bytes;
 }
 
-bool ConvertWebPToPng(const std::wstring& source,
-                      const std::wstring& destination) {
-    const auto encoded = ReadFileBytes(source);
-    if (!encoded.has_value()) {
-        return false;
-    }
+bool IsAllowedSourceSize(UINT width, UINT height) noexcept {
+    return width != 0 && height != 0 && width <= kMaximumSourceEdge &&
+           height <= kMaximumSourceEdge &&
+           static_cast<std::uint64_t>(width) * height <= kMaximumSourcePixels;
+}
 
-    int width = 0;
-    int height = 0;
-    std::uint8_t* decoded = WebPDecodeBGRA(
-        encoded->data(), encoded->size(), &width, &height);
-    if (decoded == nullptr || width <= 0 || height <= 0) {
-        WebPFree(decoded);
-        return false;
+bool CoverResultSucceeded(HRESULT result) {
+    if (IsResourceAllocationFailure(result)) {
+        throw std::bad_alloc();
     }
+    return SUCCEEDED(result);
+}
 
-    const std::uint64_t stride = static_cast<std::uint64_t>(width) * 4;
-    const std::uint64_t decoded_size =
-        stride * static_cast<std::uint64_t>(height);
-    if (stride > std::numeric_limits<UINT>::max() ||
-        decoded_size > std::numeric_limits<UINT>::max()) {
-        WebPFree(decoded);
-        return false;
+std::pair<UINT, UINT> PreparedSize(UINT width, UINT height) noexcept {
+    const UINT longest = (std::max)(width, height);
+    if (longest <= kMaximumPreparedEdge) {
+        return {width, height};
     }
+    return {(std::max)(1U, width * kMaximumPreparedEdge / longest),
+            (std::max)(1U, height * kMaximumPreparedEdge / longest)};
+}
 
-    using Microsoft::WRL::ComPtr;
+using Microsoft::WRL::ComPtr;
+
+struct WicImage final {
     ComPtr<IWICImagingFactory> factory;
+    ComPtr<IWICBitmapFrameDecode> frame;
+    UINT width = 0;
+    UINT height = 0;
+};
+
+bool OpenWicImage(const std::wstring& path, WicImage* image) {
     HRESULT result = CoCreateInstance(
         CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
-        IID_PPV_ARGS(&factory));
+        IID_PPV_ARGS(&image->factory));
+    ComPtr<IWICBitmapDecoder> decoder;
+    if (SUCCEEDED(result)) {
+        result = image->factory->CreateDecoderFromFilename(
+            path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand,
+            &decoder);
+    }
+    if (SUCCEEDED(result)) {
+        result = decoder->GetFrame(0, &image->frame);
+    }
+    if (SUCCEEDED(result)) {
+        result = image->frame->GetSize(&image->width, &image->height);
+    }
+    return CoverResultSucceeded(result) &&
+           IsAllowedSourceSize(image->width, image->height);
+}
+
+bool WritePng(IWICImagingFactory* factory, IWICBitmapSource* source,
+              const std::wstring& destination) {
+    UINT width = 0;
+    UINT height = 0;
+    HRESULT result = source->GetSize(&width, &height);
+    if (FAILED(result) || width == 0 || height == 0 ||
+        width > kMaximumPreparedEdge || height > kMaximumPreparedEdge) {
+        return false;
+    }
+    ComPtr<IWICFormatConverter> converted;
+    result = factory->CreateFormatConverter(&converted);
+    if (SUCCEEDED(result)) {
+        result = converted->Initialize(source, GUID_WICPixelFormat32bppBGRA,
+            WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom);
+    }
     ComPtr<IWICStream> stream;
     if (SUCCEEDED(result)) {
         result = factory->CreateStream(&stream);
@@ -436,8 +476,7 @@ bool ConvertWebPToPng(const std::wstring& source,
         result = frame->Initialize(properties.Get());
     }
     if (SUCCEEDED(result)) {
-        result = frame->SetSize(static_cast<UINT>(width),
-                                static_cast<UINT>(height));
+        result = frame->SetSize(width, height);
     }
     WICPixelFormatGUID pixel_format = GUID_WICPixelFormat32bppBGRA;
     if (SUCCEEDED(result)) {
@@ -448,9 +487,7 @@ bool ConvertWebPToPng(const std::wstring& source,
         result = WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT;
     }
     if (SUCCEEDED(result)) {
-        result = frame->WritePixels(
-            static_cast<UINT>(height), static_cast<UINT>(stride),
-            static_cast<UINT>(decoded_size), decoded);
+        result = frame->WriteSource(converted.Get(), nullptr);
     }
     if (SUCCEEDED(result)) {
         result = frame->Commit();
@@ -458,11 +495,74 @@ bool ConvertWebPToPng(const std::wstring& source,
     if (SUCCEEDED(result)) {
         result = encoder->Commit();
     }
-    WebPFree(decoded);
-    return SUCCEEDED(result);
+    return CoverResultSucceeded(result);
 }
 
-std::uint64_t PreparedNameHash(const CoverArt& source) noexcept {
+bool ConvertWebPToPng(const std::wstring& source,
+                      const std::wstring& destination) {
+    const auto encoded = ReadFileBytes(source);
+    if (!encoded) {
+        return false;
+    }
+    WebPDecoderConfig config{};
+    if (!WebPInitDecoderConfig(&config)) {
+        return false;
+    }
+    struct BufferGuard final {
+        WebPDecBuffer* buffer;
+        ~BufferGuard() { WebPFreeDecBuffer(buffer); }
+    } guard{&config.output};
+    if (WebPGetFeatures(encoded->data(), encoded->size(), &config.input) !=
+            VP8_STATUS_OK || config.input.width <= 0 || config.input.height <= 0 ||
+        !IsAllowedSourceSize(static_cast<UINT>(config.input.width),
+                             static_cast<UINT>(config.input.height))) {
+        return false;
+    }
+    const auto [width, height] = PreparedSize(
+        static_cast<UINT>(config.input.width),
+        static_cast<UINT>(config.input.height));
+    config.output.colorspace = MODE_BGRA;
+    config.options.use_scaling = 1;
+    config.options.scaled_width = static_cast<int>(width);
+    config.options.scaled_height = static_cast<int>(height);
+    const VP8StatusCode decode_result =
+        WebPDecode(encoded->data(), encoded->size(), &config);
+    if (decode_result == VP8_STATUS_OUT_OF_MEMORY) {
+        throw std::bad_alloc();
+    }
+    if (decode_result != VP8_STATUS_OK) {
+        return false;
+    }
+    ComPtr<IWICImagingFactory> factory;
+    HRESULT result = CoCreateInstance(
+        CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&factory));
+    ComPtr<IWICBitmap> bitmap;
+    if (SUCCEEDED(result)) {
+        result = factory->CreateBitmapFromMemory(width, height,
+            GUID_WICPixelFormat32bppBGRA,
+            static_cast<UINT>(config.output.u.RGBA.stride),
+            static_cast<UINT>(config.output.u.RGBA.size),
+            config.output.u.RGBA.rgba, &bitmap);
+    }
+    return CoverResultSucceeded(result) &&
+           WritePng(factory.Get(), bitmap.Get(), destination);
+}
+
+bool ResizeWicImage(const WicImage& image, const std::wstring& destination) {
+    const auto [width, height] = PreparedSize(image.width, image.height);
+    ComPtr<IWICBitmapScaler> scaled;
+    HRESULT result = image.factory->CreateBitmapScaler(&scaled);
+    if (SUCCEEDED(result)) {
+        result = scaled->Initialize(image.frame.Get(), width, height,
+                                     WICBitmapInterpolationModeFant);
+    }
+    return CoverResultSucceeded(result) &&
+           WritePng(image.factory.Get(), scaled.Get(), destination);
+}
+
+std::uint64_t PreparedNameHash(const CoverArt& source,
+                              const WIN32_FILE_ATTRIBUTE_DATA& attributes) noexcept {
     constexpr std::uint64_t kOffset = 14695981039346656037ULL;
     constexpr std::uint64_t kPrime = 1099511628211ULL;
     std::uint64_t hash = kOffset;
@@ -470,16 +570,38 @@ std::uint64_t PreparedNameHash(const CoverArt& source) noexcept {
         hash ^= static_cast<std::uint16_t>(character);
         hash *= kPrime;
     }
+    const std::array<std::uint64_t, 2> identity{
+        FileTimeTicks(attributes.ftLastWriteTime),
+        (static_cast<std::uint64_t>(attributes.nFileSizeHigh) << 32) |
+            attributes.nFileSizeLow};
+    for (const auto value : identity) {
+        for (unsigned shift = 0; shift < 64; shift += 8) {
+            hash ^= (value >> shift) & 0xFF;
+            hash *= kPrime;
+        }
+    }
     return hash;
 }
 
 std::optional<CoverArt> PrepareCover(
     const CoverArt& source, const std::wstring& prepared_root) {
+    WIN32_FILE_ATTRIBUTE_DATA attributes{};
+    if (!GetFileAttributesExW(source.path.c_str(), GetFileExInfoStandard,
+                              &attributes) || attributes.nFileSizeHigh != 0 ||
+        attributes.nFileSizeLow > kMaximumEncodedCoverBytes) {
+        return std::nullopt;
+    }
     const ImageFormat format = DetectFormat(source.path);
     if (format == ImageFormat::unknown) {
         return std::nullopt;
     }
-    if (format != ImageFormat::webp &&
+    WicImage image;
+    if (format != ImageFormat::webp && !OpenWicImage(source.path, &image)) {
+        return std::nullopt;
+    }
+    const bool needs_resize = format != ImageFormat::webp &&
+        (image.width > kMaximumPreparedEdge || image.height > kMaximumPreparedEdge);
+    if (format != ImageFormat::webp && !needs_resize &&
         ExtensionMatches(source.path, format)) {
         return source;
     }
@@ -496,9 +618,9 @@ std::optional<CoverArt> PrepareCover(
 
     wchar_t file_name[64]{};
     const wchar_t* prepared_extension =
-        format == ImageFormat::webp ? L".png" : ExtensionForFormat(format);
-    swprintf_s(file_name, L"%016llX%s",
-               static_cast<unsigned long long>(PreparedNameHash(source)),
+        format == ImageFormat::webp || needs_resize ? L".png" : ExtensionForFormat(format);
+    swprintf_s(file_name, L"v2-%016llX%s",
+               static_cast<unsigned long long>(PreparedNameHash(source, attributes)),
                prepared_extension);
     std::wstring prepared = prepared_root;
     if (!prepared.empty() && prepared.back() != L'\\') {
@@ -506,14 +628,21 @@ std::optional<CoverArt> PrepareCover(
     }
     prepared += file_name;
     if (GetFileAttributesW(prepared.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        if (format == ImageFormat::webp) {
-            std::wstring temporary = prepared + L".tmp";
+        if (format == ImageFormat::webp || needs_resize) {
+            const std::wstring temporary = prepared + L"." +
+                std::to_wstring(GetCurrentProcessId()) + L".tmp";
+            struct TemporaryFile final {
+                const std::wstring& path;
+                ~TemporaryFile() { DeleteFileW(path.c_str()); }
+            } cleanup{temporary};
             DeleteFileW(temporary.c_str());
-            if (!ConvertWebPToPng(source.path, temporary) ||
+            const bool converted = format == ImageFormat::webp
+                ? ConvertWebPToPng(source.path, temporary)
+                : ResizeWicImage(image, temporary);
+            if (!converted ||
                 !MoveFileExW(temporary.c_str(), prepared.c_str(),
                              MOVEFILE_REPLACE_EXISTING |
                                  MOVEFILE_WRITE_THROUGH)) {
-                DeleteFileW(temporary.c_str());
                 return std::nullopt;
             }
         } else if (!CopyFileW(source.path.c_str(), prepared.c_str(), TRUE) &&
@@ -547,7 +676,7 @@ CoverArtResolver::CoverArtResolver(std::wstring album_cache_root,
       prepared_cache_root_(std::move(prepared_cache_root)) {}
 
 std::optional<CoverArt> CoverArtResolver::Resolve(
-    std::wstring_view artist, std::wstring_view title) const noexcept {
+    std::wstring_view artist, std::wstring_view title) const {
     try {
         std::optional<CoverArt> source = FindMatchingCacheEntry(
             album_cache_root_, TitleKeys(title));
@@ -559,6 +688,8 @@ std::optional<CoverArt> CoverArtResolver::Resolve(
             return std::nullopt;
         }
         return PrepareCover(*source, prepared_cache_root_);
+    } catch (const std::bad_alloc&) {
+        throw;
     } catch (...) {
         return std::nullopt;
     }

@@ -1,4 +1,5 @@
 #include "../src/metadata_source.h"
+#include "../src/smtc_metadata.h"
 #include "../src/metadata_transition_filter.h"
 
 #include <array>
@@ -24,6 +25,19 @@ struct LegacyWString {
 }  // namespace
 
 int wmain() {
+    for (const auto* blank : {L"", L" ", L"\t\r\n", L"\u3000\u00A0\u2003"}) {
+        if (plugin::metadata::ArtistForSmtc(blank) != L"未知歌手") {
+            std::wcerr << L"FAIL: blank SMTC artist has no fallback\n";
+            return 12;
+        }
+    }
+    for (const auto* named : {L"Kirara", L"米津玄師", L" Aimer "}) {
+        const std::wstring original(named);
+        if (plugin::metadata::ArtistForSmtc(original) != original || original != named) {
+            std::wcerr << L"FAIL: real artist or source metadata changed\n";
+            return 13;
+        }
+    }
     using plugin::metadata::ParsePlaybackTime;
     for (const auto& item : std::vector<std::pair<std::wstring, std::int64_t>>{
              {L"00:00", 0}, {L"02:21", 141}, {L"02:36", 156},
